@@ -1,30 +1,34 @@
-// Aumente este número só se quiser forçar limpeza do cache antigo.
-const CACHE = 'tiatay-v15';
-const ARQUIVOS = ['./', './index.html', './style.css?v=15', './App.js?v=15', './firebase-config.js', './manifest.json', './logo.jpg',
-  './icon-192.png', './icon-512.png', './icon-maskable-512.png'];
+const CACHE='tiatay-v17';
+const ROOT=new URL(self.registration.scope);
+const FILES=['./','./index.html','./style.css?v=17','./App.js?v=17','./install.js?v=17',
+ './firebase-config.js','./manifest.json?v=17','./logo.jpg','./icon-192.png','./icon-512.png','./icon-maskable-512.png'];
+const ASSETS=new Set(FILES.map(path=>new URL(path,ROOT).href));
 
-self.addEventListener('install', e => {
-  // guarda arquivo por arquivo: se um faltar, a instalação do app não quebra
-  e.waitUntil(caches.open(CACHE).then(c => Promise.allSettled(ARQUIVOS.map(a => c.add(a)))).then(() => self.skipWaiting()));
+self.addEventListener('install',event=>{
+ event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(FILES)).then(()=>self.skipWaiting()));
 });
 
-self.addEventListener('activate', e => {
-  e.waitUntil(
-    caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k))))
-      .then(() => self.clients.claim())
-  );
+self.addEventListener('activate',event=>{
+ event.waitUntil(caches.keys()
+  .then(keys=>Promise.all(keys.filter(key=>/^tiatay-v\d+$/.test(key)&&key!==CACHE).map(key=>caches.delete(key))))
+  .then(()=>self.clients.claim()));
 });
 
-// Rede primeiro: se você atualizar o site no GitHub, o app já mostra a versão nova.
-// Sem internet, usa a cópia guardada.
-self.addEventListener('fetch', e => {
-  const req = e.request;
-  if (req.method !== 'GET' || !req.url.startsWith(self.location.origin)) return;
-  e.respondWith(
-    fetch(req).then(res => {
-      const copia = res.clone();
-      caches.open(CACHE).then(c => c.put(req, copia));
-      return res;
-    }).catch(() => caches.match(req).then(r => r || caches.match('./index.html')))
-  );
+self.addEventListener('fetch',event=>{
+ const request=event.request;
+ if(request.method!=='GET'||!request.url.startsWith(ROOT.href))return;
+ const navigation=request.mode==='navigate';
+ if(!navigation&&!ASSETS.has(request.url))return;
+ event.respondWith((async()=>{
+  const cache=await caches.open(CACHE);
+  try{
+   const response=await fetch(request);
+   if(response.ok&&ASSETS.has(request.url))await cache.put(request,response.clone()).catch(()=>{});
+   return response;
+  }catch(error){
+   return await cache.match(request)
+    || (navigation?await cache.match(new URL('./index.html',ROOT)):null)
+    || Response.error();
+  }
+ })());
 });

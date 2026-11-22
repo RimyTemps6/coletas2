@@ -74,7 +74,7 @@ function after(){
  tid=setTimeout(()=>{
   if(!user)return;
   const ae=document.activeElement||{},typing=['INPUT','TEXTAREA','SELECT'].includes(ae.tagName)&&ae.id!=='cm'&&ae.id!=='rin';
-  if(!ses&&!eg&&!ed&&!typing)render();
+  if(!ses&&!eg&&!ed&&!patientDraft&&!typing)render();
  },120);
 }
 /* escuta em tempo real os dados de um profissional (responsáveis só enxergam a própria criança) */
@@ -113,7 +113,15 @@ function startShared(){
  else{
   UNS.push(uc.where('r','==','a').onSnapshot(s=>addU(s.docs),e=>console.warn('admin',e.code)));
   if(r==='s')UNS.push(uc.where('r','==','f').onSnapshot(s=>addU(s.docs),e=>console.warn('func',e.code)));
-  if(r==='p'&&user.kid)UNS.push(uc.where('k','==',user.kid.uk).onSnapshot(s=>addU(s.docs),e=>console.warn('prof',e.code)));
+  if(r==='p'){
+   if(user.kid?.uk&&user.kid?.pid)UNS.push(uc.where('k','==',user.kid.uk).onSnapshot(s=>addU(s.docs),e=>console.warn('prof',e.code)));
+   const id=user.id;
+   UNS.push(uc.doc(id).onSnapshot(s=>{
+    if(user?.id!==id||!s.exists)return;
+    const next=mk(s.id,s.data());
+    if(next.role==='pai'&&(next.kid?.uk!==user.kid?.uk||next.kid?.pid!==user.kid?.pid))enter(next);
+   },e=>console.warn('responsavel',e.code)));
+  }
  }
  UNS.push((r==='a'?cc:cc.where('th','==',user.k)).onSnapshot(s=>{CHATS=s.docs.map(d=>({...d.data(),id:d.id})).sort((a,b)=>a.t<b.t?-1:1);after()},e=>console.warn('chats',e.code)));
  const cl=(q,set)=>UNS.push(q.onSnapshot(s=>{set(s.docs.map(d=>({...d.data(),id:d.id})));after()},e=>console.warn('coms',e.code)));
@@ -125,6 +133,7 @@ function startShared(){
  if(r==='a'||r==='f'){const rc=fs.collection('reports');UNS.push((r==='a'?rc:rc.where('k','==',user.k)).onSnapshot(s=>{REPS=s.docs.map(d=>({...d.data(),id:d.id}));after()},e=>console.warn('reports',e.code)))}
 }
 function stopAll(){
+ patientDraft=null;
  UNS.splice(0).forEach(f=>{try{f()}catch(e){}});
  [LS,CACHE,LAST].forEach(o=>Object.keys(o).forEach(k=>delete o[k]));
  U=[];uMap={};CHATS=[];comsA=[];comsB=[];REPS=[];ed=null;relPid='';RAFCFG=undefined;RAF=[];PONTO=[];SESS=[];try{liveStop();liveUnlisten();pbStop();vozStop()}catch(e){}rafBusy=false;rafMsg='';rafEdit=false;
@@ -220,24 +229,141 @@ function filterPatients(){
  rows.forEach(row=>{row.hidden=!patientSearchKey(row.dataset.patient).includes(query)});
  $('#patient-empty').hidden=rows.some(row=>!row.hidden);
 }
+let patientDraft=null;
+const PATIENT_FIELDS=[
+ ['preferredName','Nome pelo qual prefere ser chamado','text',100],
+ ['birth','Data de nascimento','date',0],
+ ['admitted','Data de entrada na clínica','date',0],
+ ['mother','Nome completo da mãe','text',160],
+ ['father','Nome completo do pai','text',160],
+ ['phone','Telefone ou WhatsApp do responsável','tel',40],
+ ['email','E-mail do responsável','email',160],
+ ['emergencyName','Contato de emergência','text',160],
+ ['emergencyPhone','Telefone de emergência','tel',40]
+];
+const samePatient=(a,b)=>!!a&&a.uk===b.uk&&a.pid===b.pid;
+function patientAvatar(p){
+ const photo=p.profile?.photo||'';
+ return /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(photo)
+  ?`<img class="patient-initial patient-photo" src="${photo}" alt="">`
+  :`<span class="patient-initial" aria-hidden="true">${esc(p.name.trim().charAt(0).toLocaleUpperCase('pt-BR'))}</span>`;
+}
+function patientCard(p){
+ const admin=roleOf(user)==='a';
+ const linked=admin?U.filter(u=>u.role==='pai'&&samePatient(u.kid,{uk:vk,pid:p.id})):[];
+ const fields=PATIENT_FIELDS.filter(([key])=>p.profile?.[key]).map(([key,label,type])=>{
+  const value=p.profile[key];
+  return `<div><dt>${label}</dt><dd>${esc(type==='date'?value.split('-').reverse().join('/'):value)}</dd></div>`;
+ }).join('');
+ return `<section class="card patient-record"><div class="directory-toolbar"><div class="patient-record-title">${patientAvatar(p)}<h3>Ficha do paciente</h3></div><button class="btn" data-a="edit-patient">Editar ficha</button></div>
+ ${fields?`<dl class="patient-fields">${fields}</dl>`:'<p class="mu">Ficha sem informações complementares.</p>'}
+ ${admin?`<p class="mu">Contas vinculadas: ${linked.length?linked.map(u=>esc(u.name)).join(', '):'Nenhuma'}</p>`:''}</section>`;
+}
+function patientForm(){
+ const draft=patientDraft,p=draft.edit?P(draft.id):null,profile=p?.profile||{};
+ const accounts=roleOf(user)==='a'?patientOrder(U.filter(u=>u.role==='pai')):[];
+ const options=accounts.map(u=>{
+  const current=u.kid,here=samePatient(current,{uk:vk,pid:draft.id});
+  const assigned=current?.uk&&current?.pid&&!here;
+  const child=assigned?CACHE[current.uk]?.patients.find(x=>x.id===current.pid):null;
+  const desc=here?' (já vinculado a este paciente)':assigned?' (vinculado '+(child?'a '+child.name:'a outro paciente')+')':'';
+  return `<option value="${esc(u.id)}" data-uk="${esc(current?.uk||'')}" data-pid="${esc(current?.pid||'')}" data-transfer="${!!assigned}">${esc(u.name+' · '+u.show+desc)}</option>`;
+ }).join('');
+ return `<button class="lnk" data-a="cancel-patient">‹ Voltar</button><h2>${p?'Editar ficha':'Novo paciente'}</h2>
+ <form class="card patient-form" id="patient-form">
+  <label for="pn">Nome completo do paciente</label><input id="pn" name="name" value="${esc(p?.name||'')}" required maxlength="160" autocomplete="off">
+  <div class="patient-fields">${PATIENT_FIELDS.map(([key,label,type,max])=>`<div><label for="pt-${key}">${label}</label><input id="pt-${key}" name="${key}" type="${type}" value="${esc(profile[key]||'')}" ${max?`maxlength="${max}"`:`max="${dkey(new Date())}"`} autocomplete="off"></div>`).join('')}</div>
+  <div class="patient-form-photo"><label for="patient-photo">Foto do paciente</label><div class="patient-record-title"><img id="patient-photo-preview" class="patient-photo" alt="Prévia da foto" ${draft.photo?`src="${esc(draft.photo)}"`:'hidden'}><input id="patient-photo" type="file" accept="image/*"><button class="btn" type="button" data-a="remove-patient-photo" ${draft.photo?'':'hidden'}>Remover foto</button></div></div>
+  ${roleOf(user)==='a'?`<div class="patient-link"><label for="patient-account">Vincular a uma conta de responsável</label><select id="patient-account"><option value="">${p?'Manter vínculos atuais':'Vincular depois'}</option>${options}</select>
+  ${options?'':'<p class="mu">Crie uma conta de responsável em Equipe depois de salvar a ficha.</p>'}
+  <label id="patient-transfer" hidden><input type="checkbox" id="patient-confirm-transfer"> Substituir o paciente atual nesta conta. O responsável passará a ver a agenda deste paciente.</label></div>`:''}
+  <p class="am" id="patient-message" role="status"></p><button class="btn pr" type="submit">Salvar ficha</button>
+ </form>`;
+}
+function updatePatientPhoto(){
+ const photo=patientDraft.photo,preview=$('#patient-photo-preview');
+ preview.hidden=!photo;
+ if(photo)preview.src=photo;else preview.removeAttribute('src');
+ $('[data-a="remove-patient-photo"]').hidden=!photo;
+}
+async function readPatientPhoto(input){
+ const file=input.files[0],draft=patientDraft;
+ if(!file||!draft)return;
+ const form=input.form,message=$('#patient-message'),submit=form.querySelector('[type="submit"]');
+ submit.disabled=true;input.disabled=true;
+ message.textContent='';
+ try{
+  if(file.size>20000000)throw new Error('Escolha uma imagem de até 20 MB.');
+  const image=await createImageBitmap(file);
+  try{
+   if(draft!==patientDraft||!form.isConnected)return;
+   const canvas=document.createElement('canvas');canvas.width=320;canvas.height=320;
+   const ctx=canvas.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,320,320);
+   const size=Math.min(image.width,image.height);
+   ctx.drawImage(image,(image.width-size)/2,(image.height-size)/2,size,size,0,0,320,320);
+   draft.photo=canvas.toDataURL('image/jpeg',0.82);
+   updatePatientPhoto();
+  }finally{image.close()}
+ }catch(e){message.textContent=file.size>20000000?e.message:'Não foi possível abrir a foto. Tente um arquivo JPG ou PNG.'}
+ finally{input.value='';input.disabled=false;submit.disabled=false}
+}
+async function savePatientCard(form){
+ const draft=patientDraft,owner=vk;
+ if(!draft||draft.saving||!user||!['a','f'].includes(roleOf(user)))return;
+ const input=new FormData(form),name=String(input.get('name')||'').trim().replace(/\s+/g,' ');
+ const profile=Object.fromEntries(PATIENT_FIELDS.map(([key])=>[key,String(input.get(key)||'').trim()]));
+ profile.photo=draft.photo;
+ const message=$('#patient-message'),submit=form.querySelector('[type="submit"]');
+ if(!name){message.textContent='Digite o nome completo do paciente.';return}
+ if(profile.birth&&profile.admitted&&profile.admitted<profile.birth){message.textContent='A entrada na clínica deve ser na data do nascimento ou depois.';return}
+ const account=$('#patient-account')?.selectedOptions[0],accountId=roleOf(user)==='a'?account?.value:'';
+ if(accountId&&account.dataset.transfer==='true'&&!$('#patient-confirm-transfer').checked){
+  message.textContent='Confirme a substituição do paciente vinculado a esta conta.';return;
+ }
+ const target={uk:owner,pid:draft.id};
+ draft.saving=true;submit.disabled=true;message.textContent='Salvando ficha…';
+ try{
+  const ref=dref(owner,'patients').doc(draft.id),fields={name,profile};
+  if(accountId){
+   const parent=fs.collection('users').doc(accountId),expected={uk:account.dataset.uk,pid:account.dataset.pid};
+   await fs.runTransaction(async tx=>{
+    const snapshot=await tx.get(parent),record=snapshot.data();
+    if(record?.r!=='p')throw new Error('A conta de responsável não está mais disponível.');
+    const current={uk:record.kid?.uk||'',pid:record.kid?.pid||''};
+    if(!samePatient(current,expected)&&!samePatient(current,target))throw new Error('O vínculo desta conta mudou. Reabra a ficha e confira a conta.');
+    if(draft.edit)tx.update(ref,fields);else tx.set(ref,{id:draft.id,...fields,programs:[]});
+    if(!samePatient(current,target))tx.update(parent,{kid:target});
+   });
+  }else if(draft.edit)await ref.update(fields);
+  else await ref.set({id:draft.id,...fields,programs:[]});
+  if(draft!==patientDraft)return;
+  patientDraft=null;patientQuery='';
+  cur=db.patients.some(p=>p.id===draft.id)?draft.id:null;
+  flash={id:'patient-saved',ok:1,txt:'Ficha salva.'};
+  render();
+ }catch(e){
+  message.textContent=e.code==='permission-denied'?'O Firebase não autorizou esta operação para a sua conta.':e.code?'Não foi possível salvar. Confira a conexão e tente novamente.':e.message;
+ }finally{draft.saving=false;submit.disabled=false}
+}
 function vPac(){
+ if(patientDraft)return patientForm();
  if(!cur){
   const patients=patientOrder(db.patients);
   const list=patients.map(p=>`<div class="patient-row" data-patient="${esc(p.name)}">
-   <span class="patient-initial" aria-hidden="true">${esc(p.name.trim().charAt(0).toLocaleUpperCase('pt-BR'))}</span>
+   ${patientAvatar(p)}
    <span class="patient-info"><b>${esc(p.name)}</b><span class="mu">${p.programs.length} ${p.programs.length===1?'programa':'programas'}</span></span>
    <button class="btn patient-open" data-a="open" data-id="${p.id}" aria-label="Abrir ${esc(p.name)}">Abrir <span aria-hidden="true">›</span></button>
   </div>`).join('');
   return `<section class="patient-banner"><div><h2>Pacientes</h2><p>Encontre pacientes e abra os programas de atendimento.</p></div><div class="patient-total"><strong>${patients.length}</strong><span>${patients.length===1?'paciente cadastrado':'pacientes cadastrados'}</span></div></section>
    <section class="card patient-directory" aria-label="Lista de pacientes">
     <div class="directory-toolbar"><div><h3>Lista de pacientes</h3><p class="mu">Em ordem alfabética</p></div><button class="btn pr" data-a="show-patient">+ Adicionar paciente</button></div>
-    <div class="patient-create" id="patient-create" hidden><label for="pn">Nome do paciente</label><div><input id="pn" placeholder="Nome completo"><button class="btn pr" data-a="addp">Cadastrar</button></div></div>
+    <p id="patient-saved" class="patient-success" role="status"></p>
     ${patients.length?`<label class="visually-hidden" for="patient-search">Buscar paciente</label><input class="patient-search" id="patient-search" type="search" placeholder="Buscar por nome" value="${esc(patientQuery)}"><div>${list}</div><p class="mu empty-patients" id="patient-empty" role="status" hidden>Nenhum paciente encontrado.</p>`:'<p class="mu empty-patients">Nenhum paciente cadastrado.</p>'}
    </section>`;
  }
  const p=P(cur);if(!p){cur=null;return vPac()}
  if(eg)return vGForm(p);
- return `<button class="lnk" data-a="back">‹ Pacientes</button><h2>${esc(p.name)}</h2>`+p.programs.map(g=>`<div class="card"><b>${esc(g.name)}</b><div class="mu">${TYPES[g.type]}, ${g.items.length} itens${(g.helps||[]).length?'. Ajuda: '+programHelps(g).map(esc).join(', ')+(g.helpsNote?' ('+esc(g.helpsNote)+')':''):''}</div>${g.desc?`<p class="mu">${esc(g.desc)}</p>`:''}<div class="row"><button class="btn pr" data-a="start" data-id="${g.id}">Iniciar sessão</button><button class="btn" data-a="gedit" data-id="${g.id}">Editar</button></div></div>`).join('')+'<button class="btn pr big" data-a="gnew">Novo programa</button>'+(roleOf(user)==='a'?`<button class="btn ce big" style="margin-top:14px" data-a="pdelp" data-id="${p.id}">${delAsk==='p'+p.id?'Confirmar: excluir paciente, sessões e agenda':'Excluir paciente'}</button>`:'');
+ return `<button class="lnk" data-a="back">‹ Pacientes</button><h2>${esc(p.name)}</h2><p id="patient-saved" class="patient-success" role="status"></p>`+patientCard(p)+p.programs.map(g=>`<div class="card"><b>${esc(g.name)}</b><div class="mu">${TYPES[g.type]}, ${g.items.length} itens${(g.helps||[]).length?'. Ajuda: '+programHelps(g).map(esc).join(', ')+(g.helpsNote?' ('+esc(g.helpsNote)+')':''):''}</div>${g.desc?`<p class="mu">${esc(g.desc)}</p>`:''}<div class="row"><button class="btn pr" data-a="start" data-id="${g.id}">Iniciar sessão</button><button class="btn" data-a="gedit" data-id="${g.id}">Editar</button></div></div>`).join('')+'<button class="btn pr big" data-a="gnew">Novo programa</button>'+(roleOf(user)==='a'?`<button class="btn ce big" style="margin-top:14px" data-a="pdelp" data-id="${p.id}">${delAsk==='p'+p.id?'Confirmar: excluir paciente, sessões e agenda':'Excluir paciente'}</button>`:'');
 }
 function vGForm(p){
  const g=eg==='new'?{name:'',type:'dtt',desc:'',helps:[],items:[]}:p.programs.find(x=>x.id===eg);
@@ -328,7 +454,7 @@ async function doAddParent(){
  render();
 }
 function vAgPai(){
- const kd=user.kid||{},d=load(kd.uk),p=d.patients.find(x=>x.id===kd.pid),ow=allUsers().find(u=>u.k===kd.uk),hoje=dkey(new Date());
+ const kd=user.kid||{},d=kd.uk&&kd.pid?load(kd.uk):EMPTY(),p=d.patients.find(x=>x.id===kd.pid),ow=allUsers().find(u=>u.k===kd.uk),hoje=dkey(new Date());
  const L=(d.agenda||[]).filter(a=>a.pid===kd.pid).sort((a,b)=>(a.date+a.time)<(b.date+b.time)?-1:1);
  const lab=a=>{const c=aStat(a,d).c;return c==='ok'||c==='rt'?['Realizada','ok']:c==='no'?['Não realizada','no']:['Agendada','ag']};
  const card=a=>{const [t,c]=lab(a);return `<div class="card"><div class="row2"><b>${a.date.split('-').reverse().join('/')} às ${a.time}</b><span class="tag ${c}">${t}</span></div><div class="mu">${esc(ow?ow.name:'')}${a.note?'<br>'+esc(a.note):''}</div></div>`};
@@ -361,7 +487,7 @@ function vEq(){
  const inc=d=>d.sessions.filter(s=>s.end&&(new Date(s.end)-new Date(s.date))/60000<MIN_SESSAO).length;
  const emp=staff(),opts=k=>patientOrder(load(k).patients).map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
  const cards=emp.map(u=>{const d=load(u.k),last=d.sessions.map(s=>s.date).sort().pop(),pend=(d.agenda||[]).filter(a=>['at','no'].includes(aStat(a,d).c)).length;return `<div class="card"><span class="who">${av(u.k,u.name)}<b>${esc(u.name)}</b>${u.admin?' (administração)':''}</span><div class="mu">Usuário: ${esc(u.show)}<br>${d.patients.length} paciente(s), ${sTot(d)} sessão(ões). Última: ${last?new Date(last).toLocaleDateString('pt-BR'):'nenhuma'}<br>Pendências na agenda: ${pend}. Sessões incompletas: ${inc(d)}</div><div class="row"><button class="btn pr" data-a="see" data-k="${u.k}">Ver e editar dados</button><button class="btn" data-a="seecal" data-k="${u.k}">Agenda</button>${u.admin?'':`<button class="btn" data-a="chatwith" data-k="${u.k}">Conversar</button><button class="btn ce" data-a="udel" data-k="${u.k}">${delAsk==='u'+u.k?'Confirmar exclusão':'Excluir'}</button>`}</div></div>`}).join('');
- const pais=allUsers().filter(u=>u.role==='pai').map(u=>{const d=load(u.kid.uk),p=d.patients.find(x=>x.id===u.kid.pid),o=allUsers().find(x=>x.k===u.kid.uk);return `<div class="card"><span class="who">${av(u.k,u.name)}<b>${esc(u.name)}</b></span><div class="mu">Usuário: ${esc(u.show)}<br>Criança: ${esc(p?p.name:'removida')}. Profissional: ${esc(o?o.name:'removida')}</div><div class="row"><button class="btn" data-a="chatwith" data-k="${u.k}">Conversar</button><button class="btn ce" data-a="udel" data-k="${u.k}">${delAsk==='u'+u.k?'Confirmar exclusão':'Excluir'}</button></div></div>`}).join('')||'<p class="mu">Nenhuma conta de responsável ainda.</p>';
+ const pais=allUsers().filter(u=>u.role==='pai').map(u=>{const kd=u.kid||{},d=load(kd.uk),p=d.patients.find(x=>x.id===kd.pid),o=allUsers().find(x=>x.k===kd.uk);return `<div class="card"><span class="who">${av(u.k,u.name)}<b>${esc(u.name)}</b></span><div class="mu">Usuário: ${esc(u.show)}<br>Criança: ${esc(p?p.name:'removida')}. Profissional: ${esc(o?o.name:'removida')}</div><div class="row"><button class="btn" data-a="chatwith" data-k="${u.k}">Conversar</button><button class="btn ce" data-a="udel" data-k="${u.k}">${delAsk==='u'+u.k?'Confirmar exclusão':'Excluir'}</button></div></div>`}).join('')||'<p class="mu">Nenhuma conta de responsável ainda.</p>';
  const secs=allUsers().filter(u=>u.role==='sec').map(u=>`<div class="card"><span class="who">${av(u.k,u.name)}<b>${esc(u.name)}</b></span><div class="mu">Usuário: ${esc(u.show)}<br>Secretária: chat com a administração, avisos, ponto e agendas das prestadoras.</div><div class="row"><button class="btn" data-a="chatwith" data-k="${u.k}">Conversar</button><button class="btn ce" data-a="udel" data-k="${u.k}">${delAsk==='u'+u.k?'Confirmar exclusão':'Excluir'}</button></div></div>`).join('')||'<p class="mu">Nenhuma conta de secretária ainda.</p>';
  const secForm='<div class="card"><h3>Criar conta de secretária</h3><label for="sn">Nome completo</label><input id="sn"><label for="sc">CPF</label><input id="sc" inputmode="numeric" placeholder="000.000.000-00"><p class="am" id="am3"></p><button class="btn pr big" data-a="sadd">Criar secretária</button><p class="mu">O usuário é o nome sem espaços e a senha é o CPF. A secretária vê só o chat com a administração, os avisos, o ponto e as agendas das prestadoras (sem sessões, relatórios ou gravações).</p></div>';
  const adms=allUsers().filter(u=>u.admin),hasRimy=adms.some(u=>u.k==='rimy');
@@ -981,21 +1107,6 @@ function liveAway(fora){
  }
 }
 document.addEventListener('visibilitychange',()=>liveAway(document.hidden));
-let swErr='';
-async function instDiag(){
- const el=$('#idg'),out=[],ok=(b,t)=>out.push((b?'✅ ':'❌ ')+t);
- if(el)el.textContent='Verificando...';
- ok(location.protocol==='https:'||location.hostname==='localhost','Endereço seguro (https)');
- out.push((matchMedia('(display-mode: standalone)').matches?'ℹ️ Você já está usando o aplicativo instalado.':'ℹ️ Você está no navegador (ainda não instalado).'));
- try{
-  const r=await fetch('manifest.json',{cache:'no-store'});ok(r.ok,'manifest.json encontrado ('+r.status+')');
-  if(r.ok){const m=await r.json();for(const ic of (m.icons||[])){let st=0;try{st=(await fetch(ic.src,{cache:'no-store'})).status}catch(e){}ok(st===200,'Ícone '+ic.src+' ('+(st||'falhou')+')')}}
- }catch(e){ok(false,'manifest.json não carregou ou está com erro')}
- try{const reg=await navigator.serviceWorker.getRegistration();ok(!!reg&&!!(reg.active||reg.waiting||reg.installing),'Service worker registrado'+(reg&&reg.active?' e ativo':'')+(swErr?' (erro: '+swErr+')':''))}catch(e){ok(false,'Service worker indisponível neste navegador')}
- ok(!!inst,inst?'O Chrome liberou a instalação (botão acima)':'O Chrome ainda não liberou a instalação. Use o menu ⋮ → Instalar app / Adicionar à tela inicial');
- if(el)el.innerHTML=out.map(esc).join('<br>');
-}
-
 /* ---------- Secretária: ponto, contas e agenda ---------- */
 let PONTO=[];
 const pdate=x=>{try{return x.t&&x.t.toDate?x.t.toDate():new Date(x.lt)}catch(e){return new Date()}};
@@ -1081,13 +1192,18 @@ document.addEventListener('click',e=>{
  if(a==='sadd'){doAddSec();return}
  if(a==='aadm'){doAddAdmin();return}
  if(a==='radd'){doAddParent();return}
-if(a==='out'){patientQuery='';ed=null;relPid='';user=null;ses=null;cur=null;eg=null;authMsg='';auth.signOut()}
-else if(a==='nav'){if(ed){saveRep();ed=null}relPid='';view=d.v;msg='';delAsk='';eg=null;finMsg=null;cth='';flash=null;scrollTo(0,0)}
- else if(a==='show-patient'){
-  const form=$('#patient-create');form.hidden=!form.hidden;if(!form.hidden)$('#pn').focus();
+if(a==='out'){patientDraft=null;patientQuery='';ed=null;relPid='';user=null;ses=null;cur=null;eg=null;authMsg='';auth.signOut()}
+else if(a==='nav'){patientDraft=null;if(ed){saveRep();ed=null}relPid='';view=d.v;msg='';delAsk='';eg=null;finMsg=null;cth='';flash=null;scrollTo(0,0)}
+ else if(a==='show-patient'||a==='edit-patient'){
+  flash=null;const p=a==='edit-patient'?P(cur):null;
+  patientDraft={id:p?.id||uid(),edit:!!p,photo:/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(p?.profile?.photo||'')?p.profile.photo:''};
+  render();scrollTo(0,0);$('#pn').focus();
   return;
  }
- else if(a==='addp'){const n=$('#pn').value.trim();if(!n)return;db.patients.push({id:uid(),name:n,programs:[]});patientQuery='';save()}
+ else if(a==='cancel-patient'){patientDraft=null}
+ else if(a==='remove-patient-photo'){
+  patientDraft.photo='';updatePatientPhoto();return;
+ }
  else if(a==='open'){cur=d.id;scrollTo(0,0)}
  else if(a==='back'){cur=null;eg=null}
  else if(a==='gnew')eg='new';
@@ -1134,8 +1250,6 @@ else if(a==='cdel'){if(delAsk==='c'+d.id){comsA=comsA.filter(c=>c.id!==d.id);com
  else if(a==='cth'||a==='chatwith'){cth=d.k;view='cha'}
  else if(a==='cback')cth='';
 else if(a==='send'){const x=$('#cm').value.trim();if(!x)return;const th=roleOf(user)==='a'?cth:user.k,m={id:uid(),th,from:user.k,txt:x,t:new Date().toISOString(),r:false};CHATS.push(m);fs.collection('chats').doc(m.id).set(m).catch(erro);$('#cm').value='';rf0=true}
- else if(a==='inst'){if(inst){try{inst.prompt()}catch(e){}inst=null}}
- else if(a==='idiag'){instDiag();return}
 else if(a==='pdel')setFoto('');
  else if(a==='forgot'){if(/@tiatay\.app$/.test(ADMIN_MAIL))authMsg='O administrador usa e-mail interno. Para trocar a senha, use o Console do Firebase (Authentication).';else{auth.sendPasswordResetEmail(ADMIN_MAIL).catch(()=>{});authMsg='Se o e-mail do administrador estiver cadastrado, enviamos o link para criar uma nova senha.'}}
  else if(a==='aopen'){cur=d.id;eg=null;view='pac'}
@@ -1174,24 +1288,25 @@ document.addEventListener('input',e=>{
  if(e.target.id==='ob'&&ses)ses.obs=e.target.value;
  if(e.target.id==='patient-search'){patientQuery=e.target.value;filterPatients()}
 });
-document.addEventListener('keydown',e=>{
- if(e.key==='Enter'&&e.target.id==='pn'){e.preventDefault();$('[data-a="addp"]').click()}
+document.addEventListener('submit',e=>{
+ if(e.target.id==='patient-form'){e.preventDefault();savePatientCard(e.target)}
 });
 document.addEventListener('change',e=>{
  const i=e.target.id;
  if(i==='sp'){gp=e.target.value;gg='';render()}
  if(i==='sg'){gg=e.target.value;render()}
- if(i==='vs'){patientQuery='';relPid='';vk=e.target.value;db=load(vk);cur=null;eg=null;ses=null;render()}
+ if(i==='patient-photo')readPatientPhoto(e.target);
+ if(i==='patient-account'){
+  $('#patient-confirm-transfer').checked=false;
+  $('#patient-transfer').hidden=e.target.selectedOptions[0]?.dataset.transfer!=='true';
+ }
+ if(i==='vs'){patientDraft=null;patientQuery='';relPid='';vk=e.target.value;db=load(vk);cur=null;eg=null;ses=null;render()}
  if(i==='re'){$('#rp').innerHTML=patientOrder(load(e.target.value).patients).map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}
 if(i==='pf'&&e.target.files[0]){const rd=new FileReader();rd.onload=()=>{const im=new Image();im.onload=()=>{const c=document.createElement('canvas'),z=Math.min(im.width,im.height);c.width=c.height=160;c.getContext('2d').drawImage(im,(im.width-z)/2,(im.height-z)/2,z,z,0,0,160,160);setFoto(c.toDataURL('image/jpeg',.8));render()};im.src=rd.result};rd.readAsDataURL(e.target.files[0])}
 });
 document.addEventListener('keydown',e=>{if(e.key==='Enter'&&!user&&e.target.tagName==='INPUT'){const b=document.querySelector('[data-a=login]');if(b)b.click()}if(e.key==='Enter'&&!e.shiftKey&&e.target.id==='cm'){e.preventDefault();const b=document.querySelector('[data-a=send]');if(b)b.click()}});
-addEventListener('online',render);addEventListener('offline',render);
-let inst=null;
-const instCard=()=>`<div class="card"><h3>Instalar o aplicativo</h3>${inst?'<button class="btn pr big" data-a="inst">Instalar no aparelho</button>':'<p class="mu">No celular, abra o menu do navegador e toque em “Instalar app” ou “Adicionar à tela inicial”. No iPhone, use Compartilhar e depois “Adicionar à Tela de Início”.</p>'}<button class="lnk" data-a="idiag">Não consegui instalar? Verificar</button><div id="idg" class="mu"></div></div>`;
-addEventListener('beforeinstallprompt',e=>{e.preventDefault();inst=e;render()});
-addEventListener('appinstalled',()=>{inst=null;render()});
-if('serviceWorker' in navigator&&location.protocol.startsWith('http'))addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(e=>{swErr=String((e&&e.message)||e)}));
+addEventListener('online',()=>{if(!patientDraft)render()});addEventListener('offline',()=>{if(!patientDraft)render()});
+const instCard=()=>'<div class="card"><h3>Aplicativo Tia Tay</h3><button class="btn pr" type="button" data-install>Instalar aplicativo</button></div>';
 
 setInterval(()=>{if(user&&!ses&&['cal','eq'].includes(view)&&!['INPUT','TEXTAREA','SELECT'].includes((document.activeElement||{}).tagName))render()},60000);
 if(cfgErr){booting=false;render()}

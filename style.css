@@ -168,9 +168,6 @@ input[type=range]{width:100%;margin:8px 0 0}
 .patient-total span{font-size:13px;color:#f1e8fb}
 .directory-toolbar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:16px}
 .directory-toolbar h3,.directory-toolbar p{margin:0}
-.patient-create{padding:13px;margin-bottom:14px;background:var(--soft);border-radius:12px}
-.patient-create>div{display:flex;flex-wrap:wrap;gap:8px}
-.patient-create input{flex:1 1 160px;margin:0}
 .patient-search{margin:0 0 8px}
 .patient-row{display:flex;align-items:center;gap:12px;min-height:68px;padding:10px 0;border-bottom:1px solid var(--bd)}
 .patient-row:last-child{border-bottom:0}
@@ -208,3 +205,24 @@ body[data-view="login"] .lnk{display:block;margin-top:14px}
  body.signed-in{padding:0}
  body.signed-in main{width:100%;max-width:none;margin:0;padding:0}
 }
+
+.patient-record-title{display:flex;align-items:center;gap:12px;min-width:0}
+.patient-record-title h3{margin:0}
+.patient-photo{width:56px;height:56px;object-fit:cover;border-radius:13px}
+.patient-row .patient-photo{width:40px;height:40px}
+.patient-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:12px 20px;margin:0 0 14px}
+.patient-fields dt{font-size:13px;color:var(--mu)}
+.patient-fields dd{margin:0;font-weight:600;overflow-wrap:anywhere}
+.patient-form-photo,.patient-link{border-top:1px solid var(--bd);padding-top:14px;margin-top:14px}
+.patient-form-photo .patient-record-title{flex-wrap:wrap}
+.patient-form-photo input{width:auto;flex:1 1 220px;margin:0}
+#patient-transfer{display:flex;align-items:start;gap:8px;margin-top:8px}
+#patient-confirm-transfer{width:auto;flex:none;margin:5px 0 0}
+.patient-success:empty{display:none}
+.patient-success{margin:0 0 12px;font-weight:700}
+
+#install-dialog{width:min(460px,calc(100% - 32px));padding:24px;border:1px solid var(--bd);border-radius:18px;background:var(--card);color:var(--tx);box-shadow:0 20px 60px #21162d50}
+#install-dialog::backdrop{background:#17101bab}
+#install-dialog h2{font-size:27px}
+#install-dialog form{margin-top:18px}
+@media (max-width:520px){header:has(.header-install) #st{display:none}}
