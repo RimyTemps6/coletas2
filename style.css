@@ -260,3 +260,8 @@ body[data-view="login"] .lnk{display:block;margin-top:14px}
 @media (min-width:610px){
  .dashboard-filter{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;align-items:end}
 }
+.patient-copy{margin-bottom:16px;padding:12px;border:1px solid var(--bd);border-radius:12px;background:var(--soft)}
+.patient-copy-actions{display:flex;gap:8px;flex-wrap:wrap}
+.patient-copy-actions select{flex:1 1 200px;min-width:0;margin:0}
+#patient-copy-message{margin:8px 0 0}
+#patient-copy-message:empty{display:none}

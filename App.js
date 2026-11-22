@@ -74,7 +74,8 @@ function after(){
  tid=setTimeout(()=>{
   if(!user)return;
   const ae=document.activeElement||{},typing=['INPUT','TEXTAREA','SELECT'].includes(ae.tagName)&&ae.id!=='cm'&&ae.id!=='rin';
-  if(!ses&&!eg&&!ed&&!patientDraft&&!typing)render();
+  if(patientDraft){refreshPatientCopyOptions();return}
+  if(!ses&&!eg&&!ed&&!typing)render();
  },120);
 }
 /* escuta em tempo real os dados de um profissional (responsáveis só enxergam a própria criança) */
@@ -245,9 +246,13 @@ const PATIENT_FIELDS=[
  ['emergencyPhone','Telefone de emergência','tel',40]
 ];
 const samePatient=(a,b)=>!!a&&a.uk===b.uk&&a.pid===b.pid;
+function patientPhoto(p){
+ const photo=p?.profile?.photo||'';
+ return /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(photo)?photo:'';
+}
 function patientAvatar(p){
- const photo=p.profile?.photo||'';
- return /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(photo)
+ const photo=patientPhoto(p);
+ return photo
   ?`<img class="patient-initial patient-photo" src="${photo}" alt="">`
   :`<span class="patient-initial" aria-hidden="true">${esc(p.name.trim().charAt(0).toLocaleUpperCase('pt-BR'))}</span>`;
 }
@@ -262,8 +267,41 @@ function patientCard(p){
  ${fields?`<dl class="patient-fields">${fields}</dl>`:'<p class="mu">Ficha sem informações complementares.</p>'}
  ${admin?`<p class="mu">Contas vinculadas: ${linked.length?linked.map(u=>esc(u.name)).join(', '):'Nenhuma'}</p>`:''}</section>`;
 }
+function patientCopyOptions(){
+ return staff().filter(u=>u.k!==vk).map(u=>{
+  const options=patientOrder(load(u.k).patients).map(p=>`<option value="${esc(p.id)}" data-owner="${esc(u.k)}">${esc(p.name)}</option>`).join('');
+  return options?`<optgroup label="${esc(u.name)}">${options}</optgroup>`:'';
+ }).join('');
+}
+function refreshPatientCopyOptions(){
+ const select=$('#patient-copy-source');
+ if(!select||select.value||!user||roleOf(user)!=='a')return;
+ const options=patientCopyOptions();
+ if(!options||select.dataset.options===options)return;
+ select.dataset.options=options;
+ select.innerHTML='<option value="">Selecione o paciente</option>'+options;
+ select.disabled=false;
+ select.form.querySelector('[data-a="copy-patient"]').disabled=false;
+}
+function copyPatientFields(form){
+ const draft=patientDraft;
+ if(!draft||draft.edit||draft.saving||!user||roleOf(user)!=='a')return;
+ const option=form.querySelector('#patient-copy-source').selectedOptions[0];
+ const message=form.querySelector('#patient-copy-message');
+ if(!option?.value){message.textContent='Selecione um paciente de outra conta.';return}
+ if(form.querySelector('#patient-photo').disabled){message.textContent='Aguarde a foto terminar de carregar.';return}
+ const owner=option.dataset.owner;
+ const source=owner!==vk&&staff().some(u=>u.k===owner)&&load(owner).patients.find(p=>p.id===option.value);
+ if(!source){message.textContent='Ficha indisponível. Selecione outro paciente.';return}
+ form.elements.namedItem('name').value=source.name;
+ PATIENT_FIELDS.forEach(([key])=>{form.elements.namedItem(key).value=source.profile?.[key]||''});
+ draft.photo=patientPhoto(source);
+ updatePatientPhoto();
+ message.textContent='Dados preenchidos. Confira a ficha antes de salvar.';
+}
 function patientForm(){
  const draft=patientDraft,p=draft.edit?P(draft.id):null,profile=p?.profile||{};
+ const copyOptions=!draft.edit&&roleOf(user)==='a'?patientCopyOptions():'';
  const accounts=roleOf(user)==='a'?patientOrder(U.filter(u=>u.role==='pai')):[];
  const options=accounts.map(u=>{
   const current=u.kid,here=samePatient(current,{uk:vk,pid:draft.id});
@@ -274,6 +312,10 @@ function patientForm(){
  }).join('');
  return `<button class="lnk" data-a="cancel-patient">‹ Voltar</button><h2>${p?'Editar ficha':'Novo paciente'}</h2>
  <form class="card patient-form" id="patient-form">
+  ${!draft.edit&&roleOf(user)==='a'?`<section class="patient-copy"><label for="patient-copy-source">Reaproveitar ficha de outra conta</label>
+   <div class="patient-copy-actions"><select id="patient-copy-source" ${copyOptions?'':'disabled'}><option value="">${copyOptions?'Selecione o paciente':'Nenhuma ficha disponível em outras contas'}</option>${copyOptions}</select><button type="button" class="btn" data-a="copy-patient" ${copyOptions?'':'disabled'}>Usar ficha</button></div>
+   <p class="mu" id="patient-copy-message" role="status"></p>
+  </section>`:''}
   <label for="pn">Nome completo do paciente</label><input id="pn" name="name" value="${esc(p?.name||'')}" required maxlength="160" autocomplete="off">
   <div class="patient-fields">${PATIENT_FIELDS.map(([key,label,type,max])=>`<div><label for="pt-${key}">${label}</label><input id="pt-${key}" name="${key}" type="${type}" value="${esc(profile[key]||'')}" ${max?`maxlength="${max}"`:`max="${dkey(new Date())}"`} autocomplete="off"></div>`).join('')}</div>
   <div class="patient-form-photo"><label for="patient-photo">Foto do paciente</label><div class="patient-record-title"><img id="patient-photo-preview" class="patient-photo" alt="Prévia da foto" ${draft.photo?`src="${esc(draft.photo)}"`:'hidden'}><input id="patient-photo" type="file" accept="image/*"><button class="btn" type="button" data-a="remove-patient-photo" ${draft.photo?'':'hidden'}>Remover foto</button></div></div>
@@ -1266,11 +1308,12 @@ if(a==='out'){patientDraft=null;patientQuery='';ed=null;relPid='';user=null;ses=
 else if(a==='nav'){patientDraft=null;if(ed){saveRep();ed=null}relPid='';view=d.v;msg='';delAsk='';eg=null;finMsg=null;cth='';flash=null;scrollTo(0,0)}
  else if(a==='show-patient'||a==='edit-patient'){
   flash=null;const p=a==='edit-patient'?P(cur):null;
-  patientDraft={id:p?.id||uid(),edit:!!p,photo:/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(p?.profile?.photo||'')?p.profile.photo:''};
+  patientDraft={id:p?.id||uid(),edit:!!p,photo:patientPhoto(p)};
   render();scrollTo(0,0);$('#pn').focus();
   return;
  }
  else if(a==='cancel-patient'){patientDraft=null}
+ else if(a==='copy-patient'){copyPatientFields(b.form);return}
  else if(a==='remove-patient-photo'){
   patientDraft.photo='';updatePatientPhoto();return;
  }

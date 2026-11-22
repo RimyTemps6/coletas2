@@ -1,7 +1,7 @@
-const CACHE='tiatay-v18';
+const CACHE='tiatay-v19';
 const ROOT=new URL(self.registration.scope);
-const FILES=['./','./index.html','./style.css?v=18','./App.js?v=18','./install.js?v=18',
- './firebase-config.js','./manifest.json?v=18','./logo.jpg','./icon-192.png','./icon-512.png','./icon-maskable-512.png'];
+const FILES=['./','./index.html','./style.css?v=19','./App.js?v=19','./install.js?v=19',
+ './firebase-config.js','./manifest.json?v=19','./logo.jpg','./icon-192.png','./icon-512.png','./icon-maskable-512.png'];
 const ASSETS=new Set(FILES.map(path=>new URL(path,ROOT).href));
 
 self.addEventListener('install',event=>{
