@@ -57,7 +57,7 @@ const emailOf=k=>k===ADMIN.k?ADMIN_MAIL:k+'@tiatay.app';
 const EMPTY=()=>({patients:[],sessions:[],agenda:[]});
 const dk=k=>'abacoleta_'+k;
 const TABS=['patients','sessions','agenda'];
-const CACHE={},LAST={},LS={},UNS=[];
+const CACHE={},LAST={},LS={},SESSION_DATA={},UNS=[];
 let U=[],uMap={},CHATS=[],comsA=[],comsB=[],booting=true,flash=null,authMsg='',tid=0;
 const erro=e=>{console.error(e);const t=$('#st');if(t)t.textContent='Erro: '+((e&&e.code)||'sincronização')};
 const jstr=o=>JSON.stringify(o,(k,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.keys(v).sort().reduce((r,x)=>(r[x]=v[x],r),{}):v);
@@ -82,7 +82,10 @@ function listen(k){
  if(!k||LS[k]||!fs)return;LS[k]=1;
  const c=CACHE[k]=CACHE[k]||EMPTY(),lk=LAST[k]={patients:{},sessions:{},agenda:{}},pai=user&&roleOf(user)==='p',pid=pai?(user.kid||{}).pid:null;
  const fill=(t,docs)=>{c[t]=docs.map(d=>({...d.data(),id:d.id}));lk[t]={};c[t].forEach(o=>lk[t][o.id]=jstr(o));after()};
- const on=(t,q)=>UNS.push(q.onSnapshot(s=>fill(t,s.docs),e=>console.warn(t,e.code)));
+ const on=(t,q)=>UNS.push(q.onSnapshot(s=>{
+  if(t==='sessions')SESSION_DATA[k]='ready';
+  fill(t,s.docs);
+ },e=>{if(t==='sessions'){SESSION_DATA[k]='error';after()}console.warn(t,e.code)}));
  if(pai){
   UNS.push(dref(k,'patients').doc(pid).onSnapshot(s=>fill('patients',s.exists?[s]:[]),e=>console.warn(e.code)));
   on('sessions',dref(k,'sessions').where('pid','==',pid));on('agenda',dref(k,'agenda').where('pid','==',pid));
@@ -133,9 +136,9 @@ function startShared(){
  if(r==='a'||r==='f'){const rc=fs.collection('reports');UNS.push((r==='a'?rc:rc.where('k','==',user.k)).onSnapshot(s=>{REPS=s.docs.map(d=>({...d.data(),id:d.id}));after()},e=>console.warn('reports',e.code)))}
 }
 function stopAll(){
- patientDraft=null;
+ patientDraft=null;programFolder=null;dashboardFrom='';dashboardTo='';
  UNS.splice(0).forEach(f=>{try{f()}catch(e){}});
- [LS,CACHE,LAST].forEach(o=>Object.keys(o).forEach(k=>delete o[k]));
+ [LS,CACHE,LAST,SESSION_DATA].forEach(o=>Object.keys(o).forEach(k=>delete o[k]));
  U=[];uMap={};CHATS=[];comsA=[];comsB=[];REPS=[];ed=null;relPid='';RAFCFG=undefined;RAF=[];PONTO=[];SESS=[];try{liveStop();liveUnlisten();pbStop();vozStop()}catch(e){}rafBusy=false;rafMsg='';rafEdit=false;
 }
 /* cria o login de outra pessoa sem deslogar a administradora (usa um segundo "app" do Firebase) */
@@ -345,6 +348,73 @@ async function savePatientCard(form){
   message.textContent=e.code==='permission-denied'?'O Firebase não autorizou esta operação para a sua conta.':e.code?'Não foi possível salvar. Confira a conexão e tente novamente.':e.message;
  }finally{draft.saving=false;submit.disabled=false}
 }
+const DEFAULT_FOLDERS=['Escolar','Casa','Clínica'];
+const SPECIALTIES=['ABA','Psicopedagogia','TCC','Reforço Escolar'];
+let programFolder=null, dashboardFrom='',dashboardTo='';
+const foldersFor=p=>[...new Set([...DEFAULT_FOLDERS,...(p.programFolders||[]),...p.programs.map(g=>g.folder).filter(Boolean)])];
+function vPrograms(p){
+ const folders=foldersFor(p),current=folders.includes(programFolder)||programFolder===''?programFolder:null;
+ const programs=p.programs.filter(g=>current===null||(g.folder||'')===current);
+ const folderButton=(label,key,count)=>`<button type="button" class="chip ${key===current?'on':''}" data-a="gfolder" ${key===null?'':`data-folder="${esc(key)}"`} aria-pressed="${key===current}">${esc(label)} <span>${count}</span></button>`;
+ return `<section class="card program-directory" aria-label="Programas do paciente">
+  <div class="directory-toolbar"><h3>Programas</h3><button class="btn pr" data-a="gnew">+ Novo programa</button></div>
+  <div class="program-folders" role="group" aria-label="Filtrar por pasta">
+   ${folderButton('Todas as pastas',null,p.programs.length)}
+   ${folders.map(folder=>folderButton(folder,folder,p.programs.filter(g=>g.folder===folder).length)).join('')}
+   ${folderButton('Sem pasta','',p.programs.filter(g=>!g.folder).length)}
+  </div>
+  <details class="program-folder-create"><summary>Criar pasta</summary>
+   <form id="program-folder-form"><label for="folder-name">Nome da pasta</label><div class="program-folder-input"><input id="folder-name" required maxlength="60" placeholder="Ex.: Comunidade"><button class="btn" type="submit">Criar</button></div><div class="mu" id="folder-message" role="status"></div></form>
+  </details>
+  <div class="program-list">${programs.map(g=>`<article class="program-line">
+   <h4>${esc(g.name)}</h4><div class="program-tags">${g.specialty?`<span class="tag">${esc(g.specialty)}</span>`:''}<span class="tag">${esc(g.folder||'Sem pasta')}</span></div>
+   <div class="mu">${esc(TYPES[g.type]||g.type||'')} · ${g.items.length} itens${(g.helps||[]).length?' · Ajuda: '+programHelps(g).map(esc).join(', ')+(g.helpsNote?' ('+esc(g.helpsNote)+')':''):''}</div>
+   ${g.desc?`<p class="mu">${esc(g.desc)}</p>`:''}
+   <div class="program-actions"><button class="btn pr" data-a="start" data-id="${g.id}">Iniciar sessão</button><button class="btn" data-a="gedit" data-id="${g.id}">Editar</button></div>
+  </article>`).join('')||'<p class="mu">Nenhum programa neste filtro.</p>'}</div>
+ </section>`;
+}
+function createProgramFolder(form){
+ const p=P(cur),name=form.querySelector('#folder-name').value.trim();
+ if(!p||!name)return;
+ const existing=foldersFor(p).find(folder=>patientSearchKey(folder)===patientSearchKey(name));
+ if(existing||['sem pasta','todas as pastas'].includes(patientSearchKey(name))){
+  form.querySelector('#folder-message').textContent='Este nome já é usado na lista de pastas.';return;
+ }
+ p.programFolders=[...(p.programFolders||[]),name];
+ programFolder=name;
+ save();
+ render();
+}
+
+function dashboardSummary(sessions,from,to){
+ let count=0,records=0;
+ for(const session of sessions){
+  const day=dkey(session.date);
+  if((from&&day<from)||(to&&day>to))continue;
+  count+=sessN(session);records++;
+ }
+ return {count,records};
+}
+function vDashboard(){
+ const valid=!dashboardFrom||!dashboardTo||dashboardFrom<=dashboardTo;
+ const rows=valid?staff().map(u=>({...dashboardSummary(load(u.k).sessions,dashboardFrom,dashboardTo),u,state:SESSION_DATA[u.k]}))
+  .sort((a,b)=>b.count-a.count||a.u.name.localeCompare(b.u.name,'pt-BR')):[];
+ const loaded=rows.filter(row=>row.state==='ready');
+ const maximum=Math.max(1,...loaded.map(row=>row.count));
+ return `<h2>Dashboard de sessões</h2>
+ <div class="card dashboard-filter"><div><label for="dash-from">De</label><input id="dash-from" type="date" value="${dashboardFrom}"></div>
+ <div><label for="dash-to">Até</label><input id="dash-to" type="date" value="${dashboardTo}"></div><button class="btn" data-a="dash-clear">Todo o período</button></div>
+ ${valid?`<div class="dashboard-stats">
+  <div class="card"><div class="mu">Sessões contabilizadas</div><strong>${loaded.reduce((n,row)=>n+row.count,0)}</strong></div>
+  <div class="card"><div class="mu">Registros de atendimento</div><strong>${loaded.reduce((n,row)=>n+row.records,0)}</strong></div>
+ </div>
+ <div class="card"><h3>Sessões por prestadora</h3><p class="mu">Contagem por conta usando a data de início do atendimento. Um registro longo pode contar mais de uma sessão, seguindo a regra da agenda.</p>
+ ${rows.some(row=>row.state!=='ready')?'<p class="mu" role="status">Os totais usam os dados já carregados.</p>':''}
+ ${rows.map(({u,state,count,records})=>`<div class="dashboard-person"><div class="dashboard-person-head"><span class="who">${av(u.k,u.name)}<span><b>${esc(u.name)}</b>${u.admin?'<span class="mu dash-role">Administração</span>':''}</span></span>
+ ${state==='ready'?`<span class="dashboard-number"><strong>${count}</strong> ${count===1?'sessão':'sessões'} <span class="mu">· ${records} ${records===1?'registro':'registros'}</span></span>`:`<span class="mu">${state==='error'?'Dados indisponíveis':'Carregando…'}</span>`}</div>
+ ${state==='ready'?`<meter min="0" max="${maximum}" value="${count}" aria-label="Sessões de ${esc(u.name)}"></meter>`:''}</div>`).join('')||'<p class="mu">Nenhuma conta disponível.</p>'}</div>`:'<p class="am" role="alert">A data inicial deve ser igual ou anterior à data final.</p>'}`;
+}
 function vPac(){
  if(patientDraft)return patientForm();
  if(!cur){
@@ -363,12 +433,12 @@ function vPac(){
  }
  const p=P(cur);if(!p){cur=null;return vPac()}
  if(eg)return vGForm(p);
- return `<button class="lnk" data-a="back">‹ Pacientes</button><h2>${esc(p.name)}</h2><p id="patient-saved" class="patient-success" role="status"></p>`+patientCard(p)+p.programs.map(g=>`<div class="card"><b>${esc(g.name)}</b><div class="mu">${TYPES[g.type]}, ${g.items.length} itens${(g.helps||[]).length?'. Ajuda: '+programHelps(g).map(esc).join(', ')+(g.helpsNote?' ('+esc(g.helpsNote)+')':''):''}</div>${g.desc?`<p class="mu">${esc(g.desc)}</p>`:''}<div class="row"><button class="btn pr" data-a="start" data-id="${g.id}">Iniciar sessão</button><button class="btn" data-a="gedit" data-id="${g.id}">Editar</button></div></div>`).join('')+'<button class="btn pr big" data-a="gnew">Novo programa</button>'+(roleOf(user)==='a'?`<button class="btn ce big" style="margin-top:14px" data-a="pdelp" data-id="${p.id}">${delAsk==='p'+p.id?'Confirmar: excluir paciente, sessões e agenda':'Excluir paciente'}</button>`:'');
+ return `<button class="lnk" data-a="back">‹ Pacientes</button><h2>${esc(p.name)}</h2><p id="patient-saved" class="patient-success" role="status"></p>`+patientCard(p)+vPrograms(p)+(roleOf(user)==='a'?`<button class="btn ce big" style="margin-top:14px" data-a="pdelp" data-id="${p.id}">${delAsk==='p'+p.id?'Confirmar: excluir paciente, sessões e agenda':'Excluir paciente'}</button>`:'');
 }
 function vGForm(p){
  const g=eg==='new'?{name:'',type:'dtt',desc:'',helps:[],items:[]}:p.programs.find(x=>x.id===eg);
  if(!g){eg=null;return vPac()}
- return `<button class="lnk" data-a="gcancel">‹ Voltar</button><h2>${eg==='new'?'Novo programa':'Editar programa'}</h2><div class="card"><label for="gn">Nome</label><input id="gn" value="${esc(g.name)}"><label for="gt">Tipo de ensino</label><select id="gt">${Object.entries(TYPES).map(([k,v])=>`<option value="${k}" ${k===g.type?'selected':''}>${v}</option>`).join('')}</select><label for="gd">Descrição do programa</label><textarea id="gd" rows="3">${esc(g.desc||'')}</textarea><label>Tipos de ajuda usados</label><div style="margin-bottom:10px">${PROGRAM_CHOICES.map(h=>`<button class="chip ${programHelps(g).includes(h)?'on':''}" data-a="gh" data-k="${esc(h)}">${esc(h)}</button>`).join('')}</div><label for="gi">Alvos ou passos (um por linha)</label><textarea id="gi" rows="5">${esc(g.items.join('\n'))}</textarea><button class="btn pr big" data-a="gsave">Salvar programa</button>${eg==='new'||roleOf(user)!=='a'?'':`<div class="row"><button class="btn ce" data-a="gdel">${delAsk==='g'+eg?'Confirmar exclusão':'Excluir programa'}</button></div>`}</div>`;
+ return `<button class="lnk" data-a="gcancel">‹ Voltar</button><h2>${eg==='new'?'Novo programa':'Editar programa'}</h2><div class="card"><label for="gn">Nome</label><input id="gn" value="${esc(g.name)}"><label for="gspecialty">Especialidade</label><select id="gspecialty"><option value="">Sem especialidade</option>${SPECIALTIES.map(name=>`<option ${g.specialty===name?'selected':''}>${name}</option>`).join('')}</select><label for="gfolder">Pasta</label><select id="gfolder"><option value="">Sem pasta</option>${foldersFor(p).map(name=>`<option value="${esc(name)}" ${(eg==='new'?programFolder:g.folder)===name?'selected':''}>${esc(name)}</option>`).join('')}</select><label for="gt">Tipo de ensino</label><select id="gt">${Object.entries(TYPES).map(([k,v])=>`<option value="${k}" ${k===g.type?'selected':''}>${v}</option>`).join('')}</select><label for="gd">Descrição do programa</label><textarea id="gd" rows="3">${esc(g.desc||'')}</textarea><label>Tipos de ajuda usados</label><div style="margin-bottom:10px">${PROGRAM_CHOICES.map(h=>`<button class="chip ${programHelps(g).includes(h)?'on':''}" data-a="gh" data-k="${esc(h)}">${esc(h)}</button>`).join('')}</div><label for="gi">Alvos ou passos (um por linha)</label><textarea id="gi" rows="5">${esc(g.items.join('\n'))}</textarea><button class="btn pr big" data-a="gsave">Salvar programa</button>${eg==='new'||roleOf(user)!=='a'?'':`<div class="row"><button class="btn ce" data-a="gdel">${delAsk==='g'+eg?'Confirmar exclusão':'Excluir programa'}</button></div>`}</div>`;
 }
 const trialLabel=c=>c.startsWith('a|')?helpLabel(c.slice(2)).replace(/([+-])$/,(_,sign)=>sign==='+'?' +':' −'):({i:'+',e:'−'})[c]||LAB[c]||c;
 function vSes(){
@@ -1159,7 +1229,7 @@ async function doAddAdmin(){
  render();
 }
 
-const ALLOW={s:['cal','avi','cha','pto','per'],a:['pac','ses','gra','rel','cal','dad','eq','avi','cha','raf','pnl','pto','per'],f:['pac','ses','gra','rel','cal','dad','avi','cha','per'],p:['cal','avi','cha','per']};
+const ALLOW={s:['cal','avi','cha','pto','per'],a:['pac','ses','gra','rel','cal','dad','eq','avi','cha','raf','pnl','pto','per','dash'],f:['pac','ses','gra','rel','cal','dad','avi','cha','per'],p:['cal','avi','cha','per']};
 function render(){
  const ri=$('#rin'),keepR=ri?ri.value:'',focR=!!ri&&document.activeElement===ri;
  if(ed&&ed.html!==null&&$('#paper')){ed.html=$('#paper').innerHTML;const t=$('#rt');if(t)ed.title=t.value}
@@ -1169,9 +1239,9 @@ function render(){
  document.body.dataset.view=user?view:'login';
  $('nav').hidden=!user;$('#out').hidden=!user;$('#me').hidden=!user;
  if(user)$('#me').innerHTML=av(user.k,user.name);
- const bar=((r==='a'&&!['eq','avi','cha','per','raf','pnl','pto'].includes(view)&&!(view==='rel'&&ed))||(r==='s'&&view==='cal'))?`<div class="vbar"><label for="vs">Ver dados de</label><select id="vs">${(r==='s'?U.filter(u=>u.role==='func'):staff()).map(u=>`<option value="${u.k}" ${u.k===vk?'selected':''}>${esc(u.name)}</option>`).join('')}</select></div>`:'';
+ const bar=((r==='a'&&!['eq','avi','cha','per','raf','pnl','pto','dash'].includes(view)&&!(view==='rel'&&ed))||(r==='s'&&view==='cal'))?`<div class="vbar"><label for="vs">Ver dados de</label><select id="vs">${(r==='s'?U.filter(u=>u.role==='func'):staff()).map(u=>`<option value="${u.k}" ${u.k===vk?'selected':''}>${esc(u.name)}</option>`).join('')}</select></div>`:'';
  const openHistory=(view==='ses'||view==='pnl')?new Set([...document.querySelectorAll('details[data-history][open]')].map(el=>el.dataset.history)):null;
- $('#main').innerHTML=user?bar+({pac:vPac,ses:vSes,gra:vGra,cal:r==='p'?vAgPai:vCal,dad:vDad,rel:vRel,raf:vRaf,pnl:vPnl,pto:vPto,eq:vEq,avi:vAvi,cha:vCha,per:vPer})[view]():vAuth();
+ $('#main').innerHTML=user?bar+({pac:vPac,ses:vSes,gra:vGra,cal:r==='p'?vAgPai:vCal,dad:vDad,dash:vDashboard,rel:vRel,raf:vRaf,pnl:vPnl,pto:vPto,eq:vEq,avi:vAvi,cha:vCha,per:vPer})[view]():vAuth();
  if(user&&view==='pac'&&!cur)filterPatients();
  if(openHistory?.size)document.querySelectorAll('details[data-history]').forEach(el=>{el.open=openHistory.has(el.dataset.history)});
  document.querySelectorAll('nav button').forEach(b=>{b.dataset.l=b.dataset.l||b.textContent;b.classList.toggle('on',b.dataset.v===view);if(b.dataset.v===view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');b.hidden=!(user&&b.dataset.r.includes(r));const n=user?(b.dataset.v==='cha'?unreadChat():b.dataset.v==='avi'?unreadCom():0):0;b.textContent=b.dataset.l+(n?' ('+n+')':'')});
@@ -1204,8 +1274,10 @@ else if(a==='nav'){patientDraft=null;if(ed){saveRep();ed=null}relPid='';view=d.v
  else if(a==='remove-patient-photo'){
   patientDraft.photo='';updatePatientPhoto();return;
  }
- else if(a==='open'){cur=d.id;scrollTo(0,0)}
- else if(a==='back'){cur=null;eg=null}
+ else if(a==='open'){programFolder=null;cur=d.id;scrollTo(0,0)}
+ else if(a==='back'){cur=null;eg=null;programFolder=null}
+ else if(a==='gfolder'){programFolder=d.folder??null}
+ else if(a==='dash-clear'){dashboardFrom='';dashboardTo=''}
  else if(a==='gnew')eg='new';
  else if(a==='gedit'){eg=d.id;delAsk=''}
  else if(a==='gcancel'){eg=null;delAsk=''}
@@ -1215,8 +1287,10 @@ else if(a==='nav'){patientDraft=null;if(ed){saveRep();ed=null}relPid='';view=d.v
   const p=P(cur),g=p.programs.find(x=>x.id===eg);
   const hl=[...document.querySelectorAll('.chip.on[data-a="gh"]')].map(x=>x.dataset.k);
   const legacy=(g?.helps||[]).filter(h=>!PROGRAM_CHOICES.includes(helpLabel(h)));
-  const v={name:n,type:$('#gt').value,desc:$('#gd').value.trim(),helps:[...hl,...legacy],items:it};
+  const folder=$('#gfolder').value,specialty=$('#gspecialty').value;
+  const v={name:n,folder,specialty,type:$('#gt').value,desc:$('#gd').value.trim(),helps:[...hl,...legacy],items:it};
   if(eg==='new')p.programs.push({id:uid(),...v});else Object.assign(g,v);
+  if(programFolder!==null)programFolder=folder;
   save();eg=null;
  }
  else if(a==='gdel'){if(roleOf(user)!=='a')return;if(delAsk==='g'+eg){const p=P(cur);p.programs=p.programs.filter(x=>x.id!==eg);save();eg=null;delAsk=''}else delAsk='g'+eg}
@@ -1252,7 +1326,7 @@ else if(a==='cdel'){if(delAsk==='c'+d.id){comsA=comsA.filter(c=>c.id!==d.id);com
 else if(a==='send'){const x=$('#cm').value.trim();if(!x)return;const th=roleOf(user)==='a'?cth:user.k,m={id:uid(),th,from:user.k,txt:x,t:new Date().toISOString(),r:false};CHATS.push(m);fs.collection('chats').doc(m.id).set(m).catch(erro);$('#cm').value='';rf0=true}
 else if(a==='pdel')setFoto('');
  else if(a==='forgot'){if(/@tiatay\.app$/.test(ADMIN_MAIL))authMsg='O administrador usa e-mail interno. Para trocar a senha, use o Console do Firebase (Authentication).';else{auth.sendPasswordResetEmail(ADMIN_MAIL).catch(()=>{});authMsg='Se o e-mail do administrador estiver cadastrado, enviamos o link para criar uma nova senha.'}}
- else if(a==='aopen'){cur=d.id;eg=null;view='pac'}
+ else if(a==='aopen'){programFolder=null;cur=d.id;eg=null;view='pac'}
  else if(a==='aadd'){const dt=$('#ad').value,tm=$('#ah').value,pid=$('#ap').value;if(!dt||!tm||!pid){$('#am').textContent='Preencha dia, horário e paciente.';return}const en=$('#ae').value;if(en&&en<=tm){$('#am').textContent='O horário final precisa ser depois do inicial.';return}const ag={id:uid(),date:dt,time:tm,pid,note:$('#an').value.trim()};if(en)ag.end=en;(db.agenda=db.agenda||[]).push(ag);save();cd=dt;const t=new Date(dt+'T00:00:00');cm={y:t.getFullYear(),m:t.getMonth()}}
  else if(a==='adel'){if(delAsk==='a'+d.id){db.agenda=(db.agenda||[]).filter(x=>x.id!==d.id);save();delAsk=''}else delAsk='a'+d.id}
  else if(a==='seecal'){vk=d.k;db=load(vk);cur=null;eg=null;ses=null;view='cal'}
@@ -1289,10 +1363,13 @@ document.addEventListener('input',e=>{
  if(e.target.id==='patient-search'){patientQuery=e.target.value;filterPatients()}
 });
 document.addEventListener('submit',e=>{
+ if(e.target.id==='program-folder-form'){e.preventDefault();createProgramFolder(e.target)}
  if(e.target.id==='patient-form'){e.preventDefault();savePatientCard(e.target)}
 });
 document.addEventListener('change',e=>{
  const i=e.target.id;
+ if(i==='dash-from'){dashboardFrom=e.target.value;render()}
+ if(i==='dash-to'){dashboardTo=e.target.value;render()}
  if(i==='sp'){gp=e.target.value;gg='';render()}
  if(i==='sg'){gg=e.target.value;render()}
  if(i==='patient-photo')readPatientPhoto(e.target);
@@ -1300,7 +1377,7 @@ document.addEventListener('change',e=>{
   $('#patient-confirm-transfer').checked=false;
   $('#patient-transfer').hidden=e.target.selectedOptions[0]?.dataset.transfer!=='true';
  }
- if(i==='vs'){patientDraft=null;patientQuery='';relPid='';vk=e.target.value;db=load(vk);cur=null;eg=null;ses=null;render()}
+ if(i==='vs'){programFolder=null;patientDraft=null;patientQuery='';relPid='';vk=e.target.value;db=load(vk);cur=null;eg=null;ses=null;render()}
  if(i==='re'){$('#rp').innerHTML=patientOrder(load(e.target.value).patients).map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}
 if(i==='pf'&&e.target.files[0]){const rd=new FileReader();rd.onload=()=>{const im=new Image();im.onload=()=>{const c=document.createElement('canvas'),z=Math.min(im.width,im.height);c.width=c.height=160;c.getContext('2d').drawImage(im,(im.width-z)/2,(im.height-z)/2,z,z,0,0,160,160);setFoto(c.toDataURL('image/jpeg',.8));render()};im.src=rd.result};rd.readAsDataURL(e.target.files[0])}
 });

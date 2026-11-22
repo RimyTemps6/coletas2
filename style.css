@@ -226,3 +226,37 @@ body[data-view="login"] .lnk{display:block;margin-top:14px}
 #install-dialog h2{font-size:27px}
 #install-dialog form{margin-top:18px}
 @media (max-width:520px){header:has(.header-install) #st{display:none}}
+
+/* Programas e dashboard de sessões */
+.program-directory .directory-toolbar{margin-bottom:12px}
+.program-folders,.program-tags,.program-actions{display:flex;flex-wrap:wrap;gap:7px}
+.program-folders .chip{min-height:40px;margin:0}
+.program-folders .chip span{margin-left:4px;font-size:.8em;opacity:.85}
+.program-folder-create{margin:14px 0;color:var(--mu)}
+.program-folder-create summary{width:fit-content;font-weight:700;color:var(--pr);cursor:pointer}
+.program-folder-create form{max-width:470px;margin-top:10px}
+.program-folder-input{display:flex;align-items:stretch;gap:8px}
+.program-folder-input input{flex:1;min-width:0;margin:0}
+.program-line{padding:16px 0;border-top:1px solid var(--bd)}
+.program-line:last-child{padding-bottom:2px}
+.program-line h4{margin:0 0 6px;font-size:17px}
+.program-tags{margin-bottom:7px}
+.program-actions{margin-top:10px}
+.dashboard-filter,.dashboard-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.dashboard-filter input{margin:0}
+.dashboard-filter .btn{justify-self:start}
+.dashboard-stats .card strong{font-size:clamp(24px,5vw,34px);font-variant-numeric:tabular-nums}
+.dashboard-person{padding:14px 0;border-top:1px solid var(--bd)}
+.dashboard-person:last-child{padding-bottom:0}
+.dashboard-person-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.dashboard-person-head .who{margin:0}
+.dashboard-person-head .who b{overflow-wrap:anywhere}
+.dash-role{display:block}
+.dashboard-number{text-align:right;font-variant-numeric:tabular-nums}
+.dashboard-person meter{display:block;width:100%;height:9px;margin-top:8px;appearance:none;border:0;background:var(--soft);border-radius:8px}
+.dashboard-person meter::-webkit-meter-bar{background:var(--soft);border:0;border-radius:8px}
+.dashboard-person meter::-webkit-meter-optimum-value{background:var(--pr);border-radius:8px}
+.dashboard-person meter::-moz-meter-bar{background:var(--pr);border-radius:8px}
+@media (min-width:610px){
+ .dashboard-filter{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;align-items:end}
+}
